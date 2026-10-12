@@ -1,6 +1,7 @@
-const API_BASE_URL = 'http://localhost:5001/api/v1';
+import type { ApiResponse } from './types';
+const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:5001/api/v1').replace(/\/+$/, '');
 
-export async function apiRequest<T = any>(
+export async function apiRequest<T = ApiResponse>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
@@ -31,23 +32,23 @@ export async function apiRequest<T = any>(
 }
 
 export const api = {
-  get: <T = any>(endpoint: string, options?: RequestInit) =>
+  get: <T = ApiResponse>(endpoint: string, options?: RequestInit) =>
     apiRequest<T>(endpoint, { ...options, method: 'GET' }),
   
-  post: <T = any>(endpoint: string, body: any, options?: RequestInit) =>
+  post: <T = ApiResponse>(endpoint: string, body: unknown, options?: RequestInit) =>
     apiRequest<T>(endpoint, {
       ...options,
       method: 'POST',
       body: JSON.stringify(body),
     }),
   
-  put: <T = any>(endpoint: string, body: any, options?: RequestInit) =>
+  put: <T = ApiResponse>(endpoint: string, body: unknown, options?: RequestInit) =>
     apiRequest<T>(endpoint, {
       ...options,
       method: 'PUT',
       body: JSON.stringify(body),
     }),
   
-  delete: <T = any>(endpoint: string, options?: RequestInit) =>
+  delete: <T = ApiResponse>(endpoint: string, options?: RequestInit) =>
     apiRequest<T>(endpoint, { ...options, method: 'DELETE' }),
 };

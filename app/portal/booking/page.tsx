@@ -1,9 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Navbar from "../../components/Navbar";
 import Footer from "../../components/Footer";
 import { api } from "../../utils/api";
+import { useSession } from '../../utils/session';
+import type { City, Theme, Addon } from '../../utils/types';
+import type { Service, GreetingPackage } from "../../utils/workflow";
 import { 
   Sparkles, 
   ArrowRight, 
@@ -23,14 +26,17 @@ import {
 export default function BookingWizardPage() {
   // Wizard state
   const [step, setStep] = useState(1);
-  const [isClient, setIsClient] = useState(false);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const { isClient, user } = useSession();
+  const isAuthenticated = !!user;
 
   // Loaded metadata
-  const [cities, setCities] = useState<any[]>([]);
-  const [packages, setPackages] = useState<any[]>([]);
-  const [themes, setThemes] = useState<any[]>([]);
-  const [addons, setAddons] = useState<any[]>([]);
+  const [cities, setCities] = useState<City[]>([]);
+  const [packages, setPackages] = useState<GreetingPackage[]>([]);
+  const [services, setServices] = useState<Service[]>([]);
+  const [serviceId, setServiceId] = useState("");
+  const submission = useRef<{ key: string; id: string } | null>(null);
+  const [themes, setThemes] = useState<Theme[]>([]);
+  const [addons, setAddons] = useState<Addon[]>([]);
   const [loadingData, setLoadingData] = useState(true);
 
   // Form Fields
@@ -51,9 +57,9 @@ export default function BookingWizardPage() {
   const [selectedAddonIds, setSelectedAddonIds] = useState<string[]>([]);
   const [specialInstructions, setSpecialInstructions] = useState("");
 
-  const [customerName, setCustomerName] = useState("");
-  const [customerEmail, setCustomerEmail] = useState("");
-  const [customerMobile, setCustomerMobile] = useState("");
+  const [customerName, setCustomerName] = useState<string | null>(null);
+  const [customerEmail, setCustomerEmail] = useState<string | null>(null);
+  const [customerMobile, setCustomerMobile] = useState<string | null>(null);
   const [companyName, setCompanyName] = useState("");
   const [city, setCity] = useState("");
   const [vipRequirements, setVipRequirements] = useState("");
@@ -65,40 +71,15 @@ export default function BookingWizardPage() {
 
   // Check auth and load static data
   useEffect(() => {
-    setIsClient(true);
-    const token = localStorage.getItem("namastey_token");
-    setIsAuthenticated(!!token);
-
-    // Auto-fill user detail if logged in
-    const storedUser = localStorage.getItem("namastey_user");
-    if (storedUser) {
-      try {
-        const user = JSON.parse(storedUser);
-        setCustomerName(user.name || "");
-        setCustomerEmail(user.email || "");
-        setCustomerMobile(user.mobile || "");
-      } catch (e) {}
-    }
-
     async function loadData() {
       try {
-        const [citiesRes, packagesRes, themesRes, addonsRes] = await Promise.all([
-          api.get("/data/cities"),
-          api.get("/data/packages"),
-          api.get("/data/themes"),
-          api.get("/data/addons"),
-        ]);
-        setCities(citiesRes.data?.cities || []);
-        setPackages(packagesRes.data?.packages || []);
-        setThemes(themesRes.data?.themes || []);
-        setAddons(addonsRes.data?.addons || []);
-        
-        // Auto-select first package if possible
-        if (packagesRes.data?.packages?.length > 0) {
-          setSelectedPackageId(packagesRes.data.packages[0].id);
-        }
+        const res = await api.get('/data/catalogue');
+        setCities(res.data.cities); setServices(res.data.services); setPackages(res.data.packages); setThemes(res.data.themes); setAddons(res.data.addons);
+        const params = new URLSearchParams(window.location.search);
+        const chosen = res.data.services.find((s: Service) => s.id === params.get('serviceId'));
+        if (chosen) { setServiceId(chosen.id); const pkg = res.data.packages.find((p: GreetingPackage) => p.id === params.get('packageId') && p.serviceIds.includes(chosen.id)); if (pkg) setSelectedPackageId(pkg.id); }
       } catch (err) {
-        console.error("Failed to load static metadata", err);
+        setError(err instanceof Error ? err.message : "Unable to load services. Refresh and try again.");
       } finally {
         setLoadingData(false);
       }
@@ -112,11 +93,12 @@ export default function BookingWizardPage() {
     );
   };
 
+  const travelService = ['airport', 'railway'].includes(services.find(s => s.id === serviceId)?.kind || '');
   const handleNextStep = () => {
     // Basic validations per step
     setError(null);
     if (step === 1) {
-      if (!fromCity || !fromArea || !toCity || !toArea || !scheduledDate || !scheduledTime) {
+      if (!serviceId || !fromCity || !fromArea || (travelService && (!toCity || !toArea)) || !scheduledDate || !scheduledTime) {
         setError("Please complete all mandatory location & schedule details.");
         return;
       }
@@ -127,7 +109,7 @@ export default function BookingWizardPage() {
         return;
       }
     } else if (step === 2) {
-      if (!selectedPackageId) {
+      if (!packages.some(p => p.id === selectedPackageId && p.serviceIds.includes(serviceId))) {
         setError("Please select a greeting package.");
         return;
       }
@@ -144,7 +126,7 @@ export default function BookingWizardPage() {
 
   const handleSubmit = async () => {
     setError(null);
-    if (!customerName || !customerEmail || !customerMobile) {
+    if (!(customerName ?? user?.name) || !(customerEmail ?? user?.email) || !(customerMobile ?? user?.mobile)) {
       setError("Please complete your contact details.");
       return;
     }
@@ -154,24 +136,26 @@ export default function BookingWizardPage() {
       return;
     }
 
+    if (submitting) return;
     setSubmitting(true);
     try {
       const payload = {
+        serviceId,
         fromCity,
         fromArea,
         pickupAddress,
-        toCity,
-        toArea,
-        dropAddress,
-        scheduledDate: new Date(scheduledDate).toISOString(),
+        toCity: travelService ? toCity : fromCity,
+        toArea: travelService ? toArea : fromArea,
+        dropAddress: travelService ? dropAddress : pickupAddress,
+        scheduledDate: new Date(`${scheduledDate}T${scheduledTime}`).toISOString(),
         scheduledTime,
         packageId: selectedPackageId,
         culturalThemeId: selectedThemeId,
         addonIds: selectedAddonIds,
         specialInstructions,
-        customerName,
-        customerEmail,
-        customerMobile,
+        customerName: customerName ?? user?.name,
+        customerEmail: customerEmail ?? user?.email,
+        customerMobile: customerMobile ?? user?.mobile,
         companyName,
         city,
         flightNumber,
@@ -180,15 +164,17 @@ export default function BookingWizardPage() {
         supportingDocuments: supportingDocsUrl ? supportingDocsUrl.split(",").map(url => url.trim()) : [],
       };
 
-      const response = await api.post("/bookings", payload);
+      const key = JSON.stringify(payload);
+      if (submission.current?.key !== key) submission.current = { key, id: crypto.randomUUID() };
+      const response = await api.post("/bookings", { ...payload, requestId: submission.current.id });
       if (response.success && response.data?.booking) {
         setSuccessBookingId(response.data.booking.bookingId || "Request Sent");
         setStep(5); // Success step
       } else {
         setError("Failed to register welcome request.");
       }
-    } catch (err: any) {
-      setError(err.message || "Booking submission failed. Please verify details.");
+    } catch (err: unknown) {
+      setError((err instanceof Error ? err.message : '') || "Booking submission failed. Please verify details.");
     } finally {
       setSubmitting(false);
     }
@@ -263,6 +249,7 @@ export default function BookingWizardPage() {
                     <span>Travel Route & Schedule Details</span>
                   </h3>
 
+                  <label className="block text-sm">Greeting service *<select required value={serviceId} onChange={e => { setServiceId(e.target.value); setSelectedPackageId(''); }} className="mt-2 w-full rounded-lg border border-stone-700 bg-stone-950 p-3"><option value="">Choose service</option>{services.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {/* Pick-up / From Area */}
                     <div className="space-y-4 border border-stone-800/80 rounded-xl p-4 bg-stone-950/40">
@@ -293,14 +280,14 @@ export default function BookingWizardPage() {
                           className="w-full bg-stone-900 border border-stone-800 rounded-lg p-2 text-sm text-stone-200 disabled:opacity-55"
                         >
                           <option value="">-- Choose Area/Terminal --</option>
-                          {cities.find(c => c.name === fromCity)?.areas.map((a: any) => (
+                          {cities.find(c => c.name === fromCity)?.areas.map((a) => (
                             <option key={a.id} value={a.name}>{a.name} ({a.type})</option>
                           ))}
                         </select>
                       </div>
 
                       <div>
-                        <label className="block text-[11px] text-stone-400 mb-1">Detailed Pickup Spot Address (Optional)</label>
+                        <label className="block text-[11px] text-stone-400 mb-1">Venue / pickup address (Optional)</label>
                         <textarea
                           rows={2}
                           value={pickupAddress}
@@ -311,6 +298,7 @@ export default function BookingWizardPage() {
                       </div>
                     </div>
 
+                    {travelService && <>
                     {/* Destination Area */}
                     <div className="space-y-4 border border-stone-800/80 rounded-xl p-4 bg-stone-950/40">
                       <h4 className="text-xs font-bold uppercase tracking-wider text-amber-400/80 mb-2">Transit Destination</h4>
@@ -340,7 +328,7 @@ export default function BookingWizardPage() {
                           className="w-full bg-stone-900 border border-stone-800 rounded-lg p-2 text-sm text-stone-200 disabled:opacity-55"
                         >
                           <option value="">-- Choose Area/Terminal --</option>
-                          {cities.find(c => c.name === toCity)?.areas.map((a: any) => (
+                          {cities.find(c => c.name === toCity)?.areas.map((a) => (
                             <option key={a.id} value={a.name}>{a.name} ({a.type})</option>
                           ))}
                         </select>
@@ -357,6 +345,7 @@ export default function BookingWizardPage() {
                         />
                       </div>
                     </div>
+                    </>}
                   </div>
 
                   {/* Flight Info & Guest Count */}
@@ -371,7 +360,7 @@ export default function BookingWizardPage() {
                           onChange={(e) => setScheduledDate(e.target.value)}
                           className="w-full bg-stone-900 border border-stone-800 rounded-lg py-2 pl-9 pr-3 text-xs text-stone-200"
                         />
-                      </div>
+                  </div>
                     </div>
 
                     <div>
@@ -428,7 +417,7 @@ export default function BookingWizardPage() {
                     </p>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      {packages.map((pkg) => (
+                      {packages.filter(p => p.serviceIds.includes(serviceId)).map((pkg) => (
                         <div
                           key={pkg.id}
                           onClick={() => setSelectedPackageId(pkg.id)}
@@ -568,7 +557,7 @@ export default function BookingWizardPage() {
                         <input
                           type="text"
                           required
-                          value={customerName}
+                          value={customerName ?? user?.name ?? ""}
                           onChange={(e) => setCustomerName(e.target.value)}
                           placeholder="e.g. Rajesh Kumar"
                           className="w-full bg-stone-900 border border-stone-800 rounded-lg py-2 pl-9 pr-3 text-xs text-stone-200"
@@ -583,7 +572,7 @@ export default function BookingWizardPage() {
                         <input
                           type="email"
                           required
-                          value={customerEmail}
+                          value={customerEmail ?? user?.email ?? ""}
                           onChange={(e) => setCustomerEmail(e.target.value)}
                           placeholder="e.g. rajesh@corporate.com"
                           className="w-full bg-stone-900 border border-stone-800 rounded-lg py-2 pl-9 pr-3 text-xs text-stone-200"
@@ -598,7 +587,7 @@ export default function BookingWizardPage() {
                         <input
                           type="tel"
                           required
-                          value={customerMobile}
+                          value={customerMobile ?? user?.mobile ?? ""}
                           onChange={(e) => setCustomerMobile(e.target.value)}
                           placeholder="e.g. 9876543210"
                           className="w-full bg-stone-900 border border-stone-800 rounded-lg py-2 pl-9 pr-3 text-xs text-stone-200"

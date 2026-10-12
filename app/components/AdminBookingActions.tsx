@@ -1,0 +1,35 @@
+"use client";
+import { useState } from 'react';
+import { api } from '../utils/api';
+import { nextStatuses, type WorkflowBooking } from '../utils/workflow';
+const input = 'mt-1 w-full rounded-lg border border-stone-700 bg-stone-950 p-2';
+const button = 'rounded-lg bg-orange-600 px-3 py-2 font-semibold text-white disabled:opacity-50';
+export default function AdminBookingActions({ booking: b, onChanged }: { booking: WorkflowBooking; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const [reason, setReason] = useState('');
+  const [price, setPrice] = useState(String(b.quotation?.price || ''));
+  const [notes, setNotes] = useState(b.quotation?.notes || '');
+  const [providerName, setProviderName] = useState(b.quotation?.providerName || '');
+  const [providerPhone, setProviderPhone] = useState(b.quotation?.providerPhone || '');
+  const [instructions, setInstructions] = useState(b.quotation?.paymentInstructions || '');
+  const [allowLater, setAllowLater] = useState(b.quotation?.allowPayLater !== false);
+  const [reference, setReference] = useState('');
+  const [received, setReceived] = useState(String(b.quotation?.price || ''));
+  const [name, setName] = useState(b.operations?.assignedName || '');
+  const [phone, setPhone] = useState(b.operations?.assignedPhone || '');
+  const [status, setStatus] = useState(''), [comment, setComment] = useState('');
+  async function send(path: string, data: object) {
+    if (busy) return; setBusy(true); setError('');
+    try { await api.put(`/bookings/${b._id}/${path}`, data); onChanged(); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Unable to update booking.'); }
+    finally { setBusy(false); }
+  }
+  return <div className="space-y-5 border-t border-stone-800 pt-5 text-sm"><p>Service: <strong>{b.service?.name || 'Legacy welcome request'}</strong></p>{error && <p role="alert" className="text-red-400">{error}</p>}
+    {['pending', 'under_review'].includes(b.status) && <section className="space-y-3"><h3 className="font-semibold">Review request</h3><label className="block">Review note / rejection reason<textarea className={input} maxLength={1000} value={reason} onChange={e => setReason(e.target.value)} /></label><div className="flex gap-2"><button className={button} disabled={busy} onClick={() => void send('review', { decision: 'accepted', reason })}>Accept request</button><button className={button} disabled={busy || reason.trim().length < 3} onClick={() => void send('review', { decision: 'rejected', reason })}>Reject request</button></div></section>}
+    {b.status === 'rejected' && <p className="text-red-300">Rejected: {b.review?.reason}</p>}
+    {['accepted', 'quotation_sent'].includes(b.status) && <form className="space-y-3" onSubmit={e => { e.preventDefault(); void send('quotation', { price: Number(price), notes, providerName, providerPhone, paymentInstructions: instructions, allowPayLater: allowLater }); }}><h3 className="font-semibold">Quotation after offline call</h3><label className="block">Provider/contact name<input required maxLength={100} className={input} value={providerName} onChange={e => setProviderName(e.target.value)} /></label><label className="block">Contact phone<input required type="tel" className={input} value={providerPhone} onChange={e => setProviderPhone(e.target.value)} /></label><label className="block">Final quotation (INR)<input required type="number" min="0.01" step="0.01" className={input} value={price} onChange={e => setPrice(e.target.value)} /></label><label className="block">Scope and terms<textarea maxLength={2000} className={input} value={notes} onChange={e => setNotes(e.target.value)} /></label><label className="block">Offline payment instructions<textarea maxLength={2000} className={input} value={instructions} onChange={e => setInstructions(e.target.value)} /></label><label className="flex gap-2"><input type="checkbox" checked={allowLater} onChange={e => setAllowLater(e.target.checked)} />Allow Pay Later</label><button className={button} disabled={busy}>{b.status === 'quotation_sent' ? 'Send revised quotation' : 'Send quotation'}</button></form>}
+    {b.quotation?.acceptedAt && <section className="space-y-3"><h3 className="font-semibold">Offline payment</h3><p>Choice: {b.payment?.choice?.replace('_', ' ') || 'Not selected'} · {b.payment?.status || 'unpaid'}</p>{b.payment?.reference && <p>Receipt/reference: {b.payment.reference}</p>}{b.payment?.status === 'unpaid' && !['cancelled', 'rejected'].includes(b.status) && <form className="space-y-3" onSubmit={e => { e.preventDefault(); if (confirm('Confirm that you actually received this offline payment?')) void send('payment', { amount: Number(received), reference }); }}><label className="block">Amount received (INR)<input required min="0.01" step="0.01" type="number" className={input} value={received} onChange={e => setReceived(e.target.value)} /></label><label className="block">Receipt / cash record / payment reference<input required minLength={3} maxLength={200} className={input} value={reference} onChange={e => setReference(e.target.value)} /></label><button disabled={busy} className={button}>Verify payment received</button></form>}{b.payment?.status === 'refund_pending' && <form onSubmit={e => { e.preventDefault(); if (confirm('Confirm the offline refund has actually been completed?')) void send('refund', { reference }); }}><label className="block">Refund reference<input required minLength={3} maxLength={200} className={input} value={reference} onChange={e => setReference(e.target.value)} /></label><button className={button} disabled={busy}>Record offline refund</button></form>}</section>}
+    {['confirmed', 'operations_assigned'].includes(b.status) && <form className="space-y-3" onSubmit={e => { e.preventDefault(); void send('assign', { assignedName: name, assignedPhone: phone }); }}><h3 className="font-semibold">Greeting staff</h3><label className="block">Name<input required className={input} value={name} onChange={e => setName(e.target.value)} /></label><label className="block">Phone<input required type="tel" className={input} value={phone} onChange={e => setPhone(e.target.value)} /></label><button disabled={busy} className={button}>Assign staff</button></form>}
+    {!!nextStatuses[b.status]?.length && <form className="space-y-3" onSubmit={e => { e.preventDefault(); if (status === 'cancelled' && !confirm('Cancel this booking? Any received payment must be refunded offline.')) return; void send('status', { status, comment }); }}><h3 className="font-semibold">Service progress</h3><label className="block">Next action<select required className={input} value={status} onChange={e => setStatus(e.target.value)}><option value="">Choose action</option>{nextStatuses[b.status].map(s => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}</select></label><label className="block">Comment<input className={input} maxLength={1000} value={comment} onChange={e => setComment(e.target.value)} /></label><button className={button} disabled={busy || !status}>Update progress</button></form>}
+  </div>;
+}

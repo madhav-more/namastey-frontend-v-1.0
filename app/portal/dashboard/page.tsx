@@ -1,19 +1,19 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Navbar from "../../components/Navbar";
 import Footer from "../../components/Footer";
+import UserQuotation from "../../components/UserQuotation";
+import { useSession } from '../../utils/session';
+import type { Booking } from '../../utils/types';
+import { escapeHtml } from '../../utils/html';
 import { api } from "../../utils/api";
 import { 
   Sparkles, 
-  Clock, 
-  CheckCircle, 
-  XCircle, 
   MapPin, 
   Calendar, 
   User, 
   ShieldCheck, 
-  MessageSquare, 
   Star, 
   AlertCircle, 
   ChevronDown, 
@@ -21,13 +21,11 @@ import {
   FileText,
   Building,
   Phone,
-  Mail
 } from "lucide-react";
 
 export default function CustomerDashboardPage() {
-  const [isClient, setIsClient] = useState(false);
-  const [user, setUser] = useState<any>(null);
-  const [bookings, setBookings] = useState<any[]>([]);
+  const { isClient, user } = useSession();
+  const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -51,65 +49,23 @@ export default function CustomerDashboardPage() {
   const [submittingCancel, setSubmittingCancel] = useState(false);
 
   // Profile Edit State
-  const [profileName, setProfileName] = useState("");
-  const [profileMobile, setProfileMobile] = useState("");
-  const [profileCompanyName, setProfileCompanyName] = useState("");
-  const [profileCity, setProfileCity] = useState("");
+  const [profileNameOverride, setProfileName] = useState<string | null>(null);
+  const profileName = profileNameOverride ?? user?.name ?? '';
+  const [profileMobileOverride, setProfileMobile] = useState<string | null>(null);
+  const profileMobile = profileMobileOverride ?? user?.mobile ?? '';
+  const [profileCompanyNameOverride, setProfileCompanyName] = useState<string | null>(null);
+  const profileCompanyName = profileCompanyNameOverride ?? user?.companyName ?? '';
+  const [profileCityOverride, setProfileCity] = useState<string | null>(null);
+  const profileCity = profileCityOverride ?? user?.city ?? '';
   const [updatingProfile, setUpdatingProfile] = useState(false);
   const [profileSuccess, setProfileSuccess] = useState(false);
 
+  const fetchBookings = useCallback(() => api.get('/bookings').then(response => { setBookings(response.data.bookings); setError(null); }).catch(err => setError(err instanceof Error ? err.message : 'Unable to load bookings.')).finally(() => setLoading(false)), []);
   useEffect(() => {
-    setIsClient(true);
-    
-    // Check authentication
-    const storedUser = localStorage.getItem("namastey_user");
-    const token = localStorage.getItem("namastey_token");
-    if (!token || !storedUser) {
-      window.location.href = "/portal/login";
-      return;
-    }
-
-    try {
-      const parsedUser = JSON.parse(storedUser);
-      setUser(parsedUser);
-      setProfileName(parsedUser.name || "");
-      setProfileMobile(parsedUser.mobile || "");
-      setProfileCompanyName(parsedUser.companyName || "");
-      setProfileCity(parsedUser.city || "");
-    } catch (e) {}
-
-    fetchBookings();
-  }, []);
-
-  const fetchBookings = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await api.get("/bookings");
-      if (response.success) {
-        setBookings(response.data?.bookings || []);
-      } else {
-        setError("Failed to fetch dashboard activities.");
-      }
-    } catch (err: any) {
-      setError(err.message || "Could not retrieve bookings. Verify server availability.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleAcceptQuotation = async (bookingId: string) => {
-    if (!confirm("Are you sure you want to approve this proposed welcome service quotation?")) return;
-    try {
-      const response = await api.put(`/bookings/${bookingId}/accept-quotation`, {});
-      if (response.success) {
-        alert("Quotation approved successfully! Your booking is now confirmed.");
-        fetchBookings();
-      }
-    } catch (err: any) {
-      alert(err.message || "Failed to approve quotation.");
-    }
-  };
+    if (!isClient) return;
+    if (!user) { window.location.replace('/portal/login'); return; }
+    void fetchBookings();
+  }, [isClient, user, fetchBookings]);
 
   const handleCancelBooking = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -124,8 +80,8 @@ export default function CustomerDashboardPage() {
         setCancelReason("");
         fetchBookings();
       }
-    } catch (err: any) {
-      alert(err.message || "Failed to cancel booking.");
+    } catch (err: unknown) {
+      alert((err instanceof Error ? err.message : '') || "Failed to cancel booking.");
     } finally {
       setSubmittingCancel(false);
     }
@@ -151,8 +107,8 @@ export default function CustomerDashboardPage() {
         setIssues("");
         fetchBookings();
       }
-    } catch (err: any) {
-      alert(err.message || "Failed to submit review.");
+    } catch (err: unknown) {
+      alert((err instanceof Error ? err.message : '') || "Failed to submit review.");
     } finally {
       setSubmittingFeedback(false);
     }
@@ -173,42 +129,38 @@ export default function CustomerDashboardPage() {
       });
 
       if (response.success) {
-        const updatedUser = {
-          ...user,
-          name: profileName,
-          mobile: profileMobile
-        };
+        const updatedUser = response.data.user;
         localStorage.setItem("namastey_user", JSON.stringify(updatedUser));
-        setUser(updatedUser);
+        window.dispatchEvent(new Event("storage"));
         setProfileSuccess(true);
       }
-    } catch (err: any) {
-      alert(err.message || "Failed to update profile particulars.");
+    } catch (err: unknown) {
+      alert((err instanceof Error ? err.message : '') || "Failed to update profile particulars.");
     } finally {
       setUpdatingProfile(false);
     }
   };
 
-  const handleDownloadInvoice = (booking: any) => {
-    // Generate simple local printable mock invoice
+  const handleDownloadBookingStatement = (booking: Booking) => {
+    // Printable booking statement. Payment receipt is verified separately by admin.
     const printWindow = window.open("", "_blank");
     if (!printWindow) return;
 
     const itemsHtml = `
       <tr>
-        <td style="padding: 10px; border-bottom: 1px solid #ddd;">${booking.package?.name}</td>
+        <td style="padding: 10px; border-bottom: 1px solid #ddd;">${escapeHtml(booking.package?.name)}</td>
         <td style="padding: 10px; border-bottom: 1px solid #ddd; text-align: right;">₹${booking.packagePrice}</td>
       </tr>
-      ${booking.addons.map((a: any) => `
+      ${booking.addons.map((a) => `
         <tr>
-          <td style="padding: 10px; border-bottom: 1px solid #ddd;">Addon: ${a.name}</td>
+          <td style="padding: 10px; border-bottom: 1px solid #ddd;">Addon: ${escapeHtml(a.name)}</td>
           <td style="padding: 10px; border-bottom: 1px solid #ddd; text-align: right;">₹${a.price}</td>
         </tr>
       `).join("")}
-      ${booking.quotation?.price > 0 ? `
+      ${(booking.quotation?.price ?? 0) > 0 ? `
         <tr>
           <td style="padding: 10px; border-bottom: 1px solid #ddd; font-weight: bold;">Custom Quotation Adjustments</td>
-          <td style="padding: 10px; border-bottom: 1px solid #ddd; text-align: right; font-weight: bold;">₹${booking.quotation.price - (booking.packagePrice + booking.addonsTotal)}</td>
+          <td style="padding: 10px; border-bottom: 1px solid #ddd; text-align: right; font-weight: bold;">₹${(booking.quotation?.price ?? 0) - (booking.packagePrice + booking.addonsTotal)}</td>
         </tr>
       ` : ""}
     `;
@@ -216,7 +168,7 @@ export default function CustomerDashboardPage() {
     printWindow.document.write(`
       <html>
         <head>
-          <title>Invoice - ${booking.bookingId}</title>
+          <title>Invoice - ${escapeHtml(booking.bookingId)}</title>
           <style>
             body { font-family: sans-serif; padding: 40px; color: #333; }
             .header { display: flex; justify-content: space-between; border-bottom: 2px solid #b45309; padding-bottom: 20px; margin-bottom: 30px; }
@@ -235,21 +187,21 @@ export default function CustomerDashboardPage() {
               <div>Premium Welcome Services</div>
             </div>
             <div style="text-align: right;">
-              <div>INVOICE</div>
-              <div style="font-weight: bold;">ID: ${booking.bookingId}</div>
+              <div>BOOKING STATEMENT</div>
+              <div style="font-weight: bold;">ID: ${escapeHtml(booking.bookingId)}</div>
               <div>Date: ${new Date(booking.createdAt).toLocaleDateString()}</div>
             </div>
           </div>
           <div class="details">
             <strong>Billed To:</strong><br>
-            Name: ${booking.customerName}<br>
-            Email: ${booking.customerEmail}<br>
-            Phone: ${booking.customerMobile}<br>
+            Name: ${escapeHtml(booking.customerName)}<br>
+            Email: ${escapeHtml(booking.customerEmail)}<br>
+            Phone: ${escapeHtml(booking.customerMobile)}<br>
             ${booking.companyName ? `Company: ${booking.companyName}<br>` : ""}
           </div>
           <div class="details">
             <strong>Service Details:</strong><br>
-            Route: ${booking.fromCity} (${booking.fromArea}) &rarr; ${booking.toCity} (${booking.toArea})<br>
+            Route: ${escapeHtml(booking.fromCity)} (${escapeHtml(booking.fromArea)}) &rarr; ${escapeHtml(booking.toCity)} (${escapeHtml(booking.toArea)})<br>
             Arrival Schedule: ${new Date(booking.scheduledDate).toLocaleDateString()} at ${booking.scheduledTime}<br>
             ${booking.flightNumber ? `Flight: ${booking.flightNumber}<br>` : ""}
           </div>
@@ -298,8 +250,8 @@ export default function CustomerDashboardPage() {
   };
 
   // Filter bookings
-  const activeBookings = bookings.filter(b => b.status !== "completed" && b.status !== "cancelled");
-  const pastBookings = bookings.filter(b => b.status === "completed" || b.status === "cancelled");
+  const activeBookings = bookings.filter(b => !(["completed", "cancelled", "rejected"].includes(b.status)));
+  const pastBookings = bookings.filter(b => ["completed", "cancelled", "rejected"].includes(b.status));
 
   if (!isClient) return null;
 
@@ -334,6 +286,7 @@ export default function CustomerDashboardPage() {
             </div>
           )}
 
+          <button className="mb-4 rounded-lg border border-stone-700 px-4 py-2 text-sm" onClick={() => void fetchBookings()} disabled={loading}>Refresh bookings</button>
           {/* Navigation Tabs */}
           <div className="flex border-b border-stone-800 mb-8">
             <button
@@ -471,15 +424,15 @@ export default function CustomerDashboardPage() {
                                       <span className="text-stone-300">₹{booking.addonsTotal}</span>
                                     </div>
                                     
-                                    {booking.quotation?.price > 0 ? (
+                                    {(booking.quotation?.price ?? 0) > 0 ? (
                                       <div className="pt-2 border-t border-stone-850 space-y-1.5">
                                         <div className="flex justify-between text-amber-400 font-bold">
                                           <span>Quoted Amount:</span>
-                                          <span>₹{booking.quotation.price}</span>
+                                          <span>₹{(booking.quotation?.price ?? 0)}</span>
                                         </div>
-                                        {booking.quotation.notes && (
+                                        {booking.quotation?.notes && (
                                           <p className="text-[10px] text-stone-400 italic bg-stone-950 p-2 rounded border border-stone-800/60 leading-normal">
-                                            Notes: {booking.quotation.notes}
+                                            Notes: {booking.quotation?.notes}
                                           </p>
                                         )}
                                       </div>
@@ -528,9 +481,9 @@ export default function CustomerDashboardPage() {
 
                               {/* Interactive Timeline Stepper */}
                               <div className="bg-stone-900/20 border border-stone-850 rounded-xl p-5">
-                                <h4 className="text-xs font-bold text-white uppercase tracking-wider mb-4">Real-Time Arrival Timeline</h4>
+                                <h4 className="text-xs font-bold text-white uppercase tracking-wider mb-4">Service Timeline</h4>
                                 <div className="relative pl-6 border-l border-stone-800 space-y-6">
-                                  {booking.timeline && booking.timeline.map((node: any, idx: number) => (
+                                  {booking.timeline && booking.timeline.map((node, idx) => (
                                     <div key={idx} className="relative">
                                       <span className="absolute -left-[30px] top-1.5 w-2 h-2 rounded-full bg-amber-500 border-4 border-stone-950 box-content" />
                                       <div className="flex items-baseline justify-between gap-4">
@@ -545,16 +498,8 @@ export default function CustomerDashboardPage() {
 
                               {/* Interactive CTA buttons */}
                               <div className="flex flex-wrap items-center justify-end gap-3 pt-4 border-t border-stone-850">
-                                {booking.status === "quotation_sent" && (
-                                  <button
-                                    onClick={() => handleAcceptQuotation(booking._id)}
-                                    className="px-4 py-2 rounded-lg bg-amber-500 text-stone-950 font-bold text-xs hover:bg-amber-400 transition-all"
-                                  >
-                                    Accept Proposed Quotation
-                                  </button>
-                                )}
-
-                                {booking.status !== "cancelled" && (
+                                <div className="w-full"><UserQuotation key={`${booking._id}-${booking.__v || 0}`} booking={booking} onChanged={fetchBookings} /></div>
+                                {!(["cancelled", "completed", "rejected", "in_progress"].includes(booking.status)) && (
                                   <button
                                     onClick={() => setCancelBookingId(booking._id)}
                                     className="px-4 py-2 rounded-lg border border-red-500/20 text-red-400 text-xs hover:bg-red-500/10 transition-all font-semibold"
@@ -614,7 +559,7 @@ export default function CustomerDashboardPage() {
                           </span>
 
                           <button
-                            onClick={() => handleDownloadInvoice(booking)}
+                            onClick={() => handleDownloadBookingStatement(booking)}
                             className="p-2 bg-stone-900 border border-stone-800 hover:border-amber-500/35 rounded-lg text-stone-400 hover:text-amber-400 transition-colors flex items-center gap-1.5 text-xs font-medium"
                             title="Generate Mock PDF Receipt"
                           >

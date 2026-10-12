@@ -1,49 +1,32 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Navbar from "../../components/Navbar";
 import Footer from "../../components/Footer";
+import CatalogueManager from "../../components/CatalogueManager";
+import AdminBookingActions from "../../components/AdminBookingActions";
+import { useSession } from '../../utils/session';
+import type { Booking } from '../../utils/types';
 import { api } from "../../utils/api";
 import { 
   ShieldAlert, 
-  Clock, 
-  CheckCircle, 
   MapPin, 
-  User, 
   ChevronRight, 
-  Send, 
   AlertCircle, 
-  Eye,
-  Activity,
-  Plus,
-  Lock,
   Search,
   BookOpen
 } from "lucide-react";
 
 export default function AdminDashboardPage() {
-  const [isClient, setIsClient] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [bookings, setBookings] = useState<any[]>([]);
+  const { isClient, user } = useSession();
+  const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
+  const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   // Selected Booking for actions
   const [selectedBookingId, setSelectedBookingId] = useState<string | null>(null);
   const selectedBooking = bookings.find(b => b._id === selectedBookingId);
-
-  // Action forms state
-  const [quotePrice, setQuotePrice] = useState("");
-  const [quoteNotes, setQuoteNotes] = useState("");
-  const [submittingQuote, setSubmittingQuote] = useState(false);
-
-  const [assignedName, setAssignedName] = useState("");
-  const [assignedPhone, setAssignedPhone] = useState("");
-  const [submittingAssign, setSubmittingAssign] = useState(false);
-
-  const [newStatus, setNewStatus] = useState("");
-  const [statusComment, setStatusComment] = useState("");
-  const [submittingStatus, setSubmittingStatus] = useState(false);
 
   // Filter Tabs
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -52,131 +35,15 @@ export default function AdminDashboardPage() {
   // Section Tabs (Leads, Preferences)
   const [activeConsole, setActiveConsole] = useState<"leads" | "preferences">("leads");
 
+  const fetchAllBookings = useCallback(() => api.get('/bookings/admin/all').then(response => { setBookings(response.data.bookings); setError(null); }).catch(err => setError(err instanceof Error ? err.message : 'Unable to load bookings.')).finally(() => setLoading(false)), []);
   useEffect(() => {
-    setIsClient(true);
-    
-    // Check credentials
-    const token = localStorage.getItem("namastey_token");
-    const storedUser = localStorage.getItem("namastey_user");
-    
-    if (!token || !storedUser) {
-      window.location.href = "/admin/login";
-      return;
-    }
+    if (!isClient) return;
+    if (!user) { window.location.replace('/admin/login'); return; }
+    if (!isAdmin) { window.location.replace('/portal/login'); return; }
+    void fetchAllBookings();
+  }, [isClient, user, isAdmin, fetchAllBookings]);
 
-    try {
-      const user = JSON.parse(storedUser);
-      if (user.role !== "admin" && user.role !== "super_admin") {
-        window.location.href = "/portal/login";
-        return;
-      }
-      setIsAdmin(true);
-    } catch (e) {
-      window.location.href = "/admin/login";
-      return;
-    }
-
-    fetchAllBookings();
-  }, []);
-
-  const fetchAllBookings = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await api.get("/bookings/admin/all");
-      if (response.success) {
-        setBookings(response.data?.bookings || []);
-      } else {
-        setError("Unable to sync booking leads database.");
-      }
-    } catch (err: any) {
-      setError(err.message || "Failed to contact admin services endpoint.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSendQuotation = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedBookingId || !quotePrice) return;
-
-    setSubmittingQuote(true);
-    try {
-      const response = await api.put(`/bookings/${selectedBookingId}/quotation`, {
-        price: Number(quotePrice),
-        notes: quoteNotes
-      });
-      if (response.success) {
-        alert("Custom quotation issued to client portal.");
-        setQuotePrice("");
-        setQuoteNotes("");
-        fetchAllBookings();
-      }
-    } catch (err: any) {
-      alert(err.message || "Quotation issuance failed.");
-    } finally {
-      setSubmittingQuote(false);
-    }
-  };
-
-  const handleAssignOperations = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedBookingId || !assignedName || !assignedPhone) return;
-
-    setSubmittingAssign(true);
-    try {
-      const response = await api.put(`/bookings/${selectedBookingId}/assign`, {
-        assignedName,
-        assignedPhone
-      });
-      if (response.success) {
-        alert("Operations greeting assistant assigned.");
-        setAssignedName("");
-        setAssignedPhone("");
-        fetchAllBookings();
-      }
-    } catch (err: any) {
-      alert(err.message || "Greeter assignment failed.");
-    } finally {
-      setSubmittingAssign(false);
-    }
-  };
-
-  const handleUpdateStatus = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedBookingId || !newStatus) return;
-
-    setSubmittingStatus(true);
-    try {
-      const response = await api.put(`/bookings/${selectedBookingId}/status`, {
-        status: newStatus,
-        comment: statusComment
-      });
-      if (response.success) {
-        alert(`Status changed to ${newStatus.toUpperCase()}`);
-        setNewStatus("");
-        setStatusComment("");
-        fetchAllBookings();
-      }
-    } catch (err: any) {
-      alert(err.message || "Status transition update failed.");
-    } finally {
-      setSubmittingStatus(false);
-    }
-  };
-
-  // Select a booking and populate default values for forms
-  const selectBooking = (id: string) => {
-    setSelectedBookingId(id);
-    const booking = bookings.find(b => b._id === id);
-    if (booking) {
-      setNewStatus(booking.status || "");
-      setAssignedName(booking.operations?.assignedName || "");
-      setAssignedPhone(booking.operations?.assignedPhone || "");
-      setQuotePrice(booking.quotation?.price > 0 ? String(booking.quotation.price) : "");
-      setQuoteNotes(booking.quotation?.notes || "");
-    }
-  };
+  const selectBooking = (id: string) => setSelectedBookingId(id);
 
   // Filter bookings list
   const filteredBookings = bookings.filter((b) => {
@@ -273,6 +140,9 @@ export default function AdminDashboardPage() {
                     {[
                       { id: "all", label: "All Requests" },
                       { id: "pending", label: "Pending" },
+                      { id: "accepted", label: "Accepted Requests" },
+                      { id: "rejected", label: "Rejected" },
+                      { id: "payment_pending", label: "Payment Pending" },
                       { id: "quotation_sent", label: "Quoted" },
                       { id: "quotation_accepted", label: "Accepted" },
                       { id: "confirmed", label: "Confirmed" },
@@ -393,128 +263,13 @@ export default function AdminDashboardPage() {
                         )}
                         {selectedBooking.specialInstructions && (
                           <div className="border-t border-stone-850 pt-1.5 mt-1 text-[10px] text-stone-400 italic">
-                            <strong>Notes:</strong> "{selectedBooking.specialInstructions}"
+                            <strong>Notes:</strong> &quot;{selectedBooking.specialInstructions}&quot;
                           </div>
                         )}
                       </div>
                     </div>
 
-                    {/* Quotation Builder Panel */}
-                    <div className="border-t border-stone-800 pt-5">
-                      <h4 className="text-xs font-bold text-white uppercase tracking-wider mb-3">Quotation Builder</h4>
-                      <form onSubmit={handleSendQuotation} className="space-y-3 text-xs">
-                        <div>
-                          <label className="block text-[10px] text-stone-400 mb-1">Quoted Price Amount (INR)</label>
-                          <input
-                            type="number"
-                            required
-                            placeholder="e.g. 2500"
-                            value={quotePrice}
-                            onChange={(e) => setQuotePrice(e.target.value)}
-                            className="w-full bg-stone-950 border border-stone-850 rounded-lg p-2 text-xs text-stone-200"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[10px] text-stone-400 mb-1">Quotation Notes / Terms</label>
-                          <textarea
-                            rows={2}
-                            placeholder="e.g. VIP buggy transit included, airport terminal charges extra..."
-                            value={quoteNotes}
-                            onChange={(e) => setQuoteNotes(e.target.value)}
-                            className="w-full bg-stone-950 border border-stone-850 rounded-lg p-2 text-xs text-stone-200"
-                          />
-                        </div>
-                        <button
-                          type="submit"
-                          disabled={submittingQuote}
-                          className="w-full py-2 bg-red-600 hover:bg-red-500 text-white font-bold text-xs rounded-lg transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
-                        >
-                          <Send className="w-3.5 h-3.5" />
-                          <span>{submittingQuote ? "Sending..." : "Send Proposed Quote"}</span>
-                        </button>
-                      </form>
-                    </div>
-
-                    {/* Operations Greeter Allocation */}
-                    <div className="border-t border-stone-800 pt-5">
-                      <h4 className="text-xs font-bold text-white uppercase tracking-wider mb-3">Assign Greeting Assistant</h4>
-                      <form onSubmit={handleAssignOperations} className="space-y-3 text-xs">
-                        <div>
-                          <label className="block text-[10px] text-stone-400 mb-1">Operations Coordinator Name</label>
-                          <input
-                            type="text"
-                            required
-                            placeholder="e.g. Sunil Deshmukh"
-                            value={assignedName}
-                            onChange={(e) => setAssignedName(e.target.value)}
-                            className="w-full bg-stone-950 border border-stone-850 rounded-lg p-2 text-xs text-stone-200"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[10px] text-stone-400 mb-1">Operations Coordinator Phone</label>
-                          <input
-                            type="tel"
-                            required
-                            placeholder="e.g. +91 9876543210"
-                            value={assignedPhone}
-                            onChange={(e) => setAssignedPhone(e.target.value)}
-                            className="w-full bg-stone-950 border border-stone-850 rounded-lg p-2 text-xs text-stone-200"
-                          />
-                        </div>
-                        <button
-                          type="submit"
-                          disabled={submittingAssign}
-                          className="w-full py-2 bg-red-600 hover:bg-red-500 text-white font-bold text-xs rounded-lg transition-colors disabled:opacity-50"
-                        >
-                          {submittingAssign ? "Allocating Staff..." : "Allocate Greeting Staff"}
-                        </button>
-                      </form>
-                    </div>
-
-                    {/* Real-time Timeline Status Transition */}
-                    <div className="border-t border-stone-800 pt-5">
-                      <h4 className="text-xs font-bold text-white uppercase tracking-wider mb-3">Timeline Controller</h4>
-                      <form onSubmit={handleUpdateStatus} className="space-y-3 text-xs">
-                        <div>
-                          <label className="block text-[10px] text-stone-400 mb-1">Select Status Level</label>
-                          <select
-                            value={newStatus}
-                            onChange={(e) => setNewStatus(e.target.value)}
-                            className="w-full bg-stone-950 border border-stone-850 rounded-lg p-2 text-xs text-stone-200"
-                          >
-                            <option value="">-- Choose Status --</option>
-                            <option value="pending">Pending review</option>
-                            <option value="under_review">Under Coordinator Review</option>
-                            <option value="quotation_sent">Quotation Sent</option>
-                            <option value="quotation_accepted">Quotation Approved</option>
-                            <option value="confirmed">Confirmed Schedule</option>
-                            <option value="operations_assigned">Operations Assistant Assigned</option>
-                            <option value="team_on_the_way">Team On The Way</option>
-                            <option value="in_progress">Greeting In Progress</option>
-                            <option value="completed">Service Completed</option>
-                            <option value="cancelled">Cancelled</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label className="block text-[10px] text-stone-400 mb-1">Timeline Log Comments</label>
-                          <input
-                            type="text"
-                            placeholder="e.g. Greeter has reached arrival gate column 4."
-                            value={statusComment}
-                            onChange={(e) => setStatusComment(e.target.value)}
-                            className="w-full bg-stone-950 border border-stone-850 rounded-lg p-2 text-xs text-stone-200"
-                          />
-                        </div>
-                        <button
-                          type="submit"
-                          disabled={submittingStatus}
-                          className="w-full py-2 bg-gradient-to-r from-red-700 to-red-600 hover:from-red-650 hover:to-red-550 text-white font-bold text-xs rounded-lg transition-all disabled:opacity-50"
-                        >
-                          {submittingStatus ? "Shifting Status..." : "Shift Booking Status"}
-                        </button>
-                      </form>
-                    </div>
-
+                    <AdminBookingActions key={`${selectedBooking._id}-${selectedBooking.__v || 0}`} booking={selectedBooking} onChanged={fetchAllBookings} />
                   </div>
                 ) : (
                   <div className="bg-stone-900/10 border border-stone-850 border-dashed rounded-2xl p-16 text-center text-xs text-stone-500 sticky top-24">
@@ -526,6 +281,8 @@ export default function AdminDashboardPage() {
             </div>
           )}
 
+          <div className="mt-8"><CatalogueManager /></div>
+          <button className="mt-4 rounded-lg border border-stone-700 px-4 py-2 text-sm" onClick={() => void fetchAllBookings()} disabled={loading}>Refresh requests</button>
           {/* MAIN PREFERENCES DATABASE */}
           {activeConsole === "preferences" && (
             <div className="bg-stone-900/20 border border-stone-850 rounded-2xl p-6">
@@ -559,7 +316,7 @@ export default function AdminDashboardPage() {
                               {hist.scheduledDate ? `${new Date(hist.scheduledDate).toLocaleDateString()}: ` : ""}
                               {hist.specialInstructions || hist.vipRequirements ? (
                                 <span>
-                                  "{hist.specialInstructions || "No instruction"}" 
+                                  &quot;{hist.specialInstructions || "No instruction"}&quot;
                                   {hist.vipRequirements && ` (VIP: ${hist.vipRequirements})`}
                                 </span>
                               ) : (
